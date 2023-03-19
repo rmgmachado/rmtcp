@@ -39,7 +39,7 @@
 // link with Ws2_32.lib
 #pragma comment (lib, "Ws2_32.lib")
 
-namespace rmgm {
+namespace rmsockets {
 
    namespace startup {
 
@@ -417,4 +417,4 @@ namespace rmgm {
 
    } // namespace startup
 
-} // namespace rmgm
+} // namespace rmsockets
