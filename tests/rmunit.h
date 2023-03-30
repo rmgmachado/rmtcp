@@ -34,7 +34,7 @@
 #include <utility>
 #include <algorithm>
 
-namespace xpunit {
+namespace rmunit {
 
    class xp_unit_test;
 
@@ -63,7 +63,7 @@ namespace xpunit {
 
       static xp_test_suite& get() noexcept
       {
-         static xpunit::xp_test_suite instance;
+         static rmunit::xp_test_suite instance;
          return instance;
       }
 
@@ -194,23 +194,23 @@ namespace xpunit {
    }
 } // namespace xpunit
 
-#define CONCAT(a, b) CONCAT_INNER(a, b)
-#define CONCAT_INNER(a, b) a ## b
-#define UNIQUE_NAME(base) CONCAT(base, __COUNTER__)
+#define RM_CONCAT(a, b) RM_CONCAT_INNER(a, b)
+#define RM_CONCAT_INNER(a, b) a ## b
+#define RM_UNIQUE_NAME(base) RM_CONCAT(base, __COUNTER__)
 
 #define TEST_CASE_INTERNAL(name, tag, TEST_CASE_NAME) \
    namespace { \
-   class TEST_CASE_NAME : public xpunit::xp_unit_test \
+   class TEST_CASE_NAME : public rmunit::xp_unit_test \
    {\
    public:\
-      TEST_CASE_NAME() : xpunit::xp_unit_test(name, tag) {} \
+      TEST_CASE_NAME() : rmunit::xp_unit_test(name, tag) {} \
       virtual void execute(); \
    };\
-   static TEST_CASE_NAME UNIQUE_NAME(unit_test_); \
+   static TEST_CASE_NAME RM_UNIQUE_NAME(unit_test_); \
    } \
    void TEST_CASE_NAME::execute()
 
-#define TEST_CASE(name, tag)  TEST_CASE_INTERNAL(name, tag, UNIQUE_NAME(xp_unit_test_))
+#define TEST_CASE(name, tag)  TEST_CASE_INTERNAL(name, tag, RM_UNIQUE_NAME(xp_unit_test_))
 
 #define SECTION(description)  section(description);
 
@@ -219,5 +219,5 @@ namespace xpunit {
 #define XPUNIT_MAIN(title) \
     int main(int argc, char** argv) \
     { \
-        return xpunit::xpunit_main(argc, argv, title); \
+        return rmunit::xpunit_main(argc, argv, title); \
     }

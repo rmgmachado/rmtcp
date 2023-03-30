@@ -30,21 +30,24 @@
 #include <array>
 #include <vector>
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#define WIN32_SOCKETs
+#if defined(_MSC_VER)
+   #define WIN32_SOCKETS
 
-#include "wepoll.h"
+   #include <winsock2.h>
+   #include <ws2tcpip.h>
 
-// link with Ws2_32.lib
-#pragma comment (lib, "Ws2_32.lib")
+   #include "wepoll.h"
+
+   // link with Ws2_32.lib
+   #pragma comment (lib, "Ws2_32.lib")
+#endif
+
+#if defined(__GNUC__)
+   #define BSD_SOCKETS
+#endif
+
 
 namespace rmsockets {
-
-   namespace startup {
-
-
-   } // namespace startup
 
    constexpr const int HN_MAX_HOSTNAME = 512;
    // socket_recv_buffer_size controls the size of a buffer in the stack

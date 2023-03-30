@@ -24,15 +24,16 @@
 *  You should have received a copy of the MIT License along with this program.
 *  If not, see https://opensource.org/licenses/MIT.
 \*****************************************************************************/
-#include "xpunit.h"
+#include "rmunit.h"
 #include "rmsockets.h"
 
-unsing namespace rmsockets;
+using namespace rmunit;
 
-TEST_CASE("", "[]")
+TEST_CASE("Test status_t class", "[status_t]")
 {
-	SECTION("")
+	SECTION("Test status_t constructors")
 	{
 		REQUIRE(true);
 	}
 }
+

@@ -8,15 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED true)
 set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 20)
 
 # include folders
+FILE(GLOB_RECURSE MY_HEADERS "../*.h*")
+
+# add the executable
 if (MSVC)
-FILE(GLOB_RECURSE MY_HEADERS "../include/*.h*")
-include_directories(../include)
-
-# add the executable
-add_executable(rmsockets xpunit.cpp test_rmsockets_h.cpp ../wepoll/wepoll.c ${MY_HEADERS} )
-endif()
-
-if (LINUX)
-# add the executable
-add_executable(rmsockets xpunit.h xpunit.cpp ../include/rmsockets.h ../wepoll/wepoll.h ../wepoll/wepoll.c test_rmsockets.cpp )
+   include_directories(../include ./wepoll ./)
+   add_executable(rmsockets rmunit.cpp ../wepoll/wepoll.c test_rmsockets.cpp ${MY_HEADERS} )
+elseif (LINUX)
+   include_directories(../include ./)
+   add_executable(rmsockets rmunit.cpp test_rmsockets.cpp )
 endif()
