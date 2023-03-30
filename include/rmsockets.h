@@ -31,19 +31,48 @@
 #include <vector>
 
 #if defined(_MSC_VER)
-   #define WIN32_SOCKETS
+   #define RM_SOCKETS_WIN32
 
    #include <winsock2.h>
    #include <ws2tcpip.h>
 
    #include "wepoll.h"
 
+   #define WSAEAGAIN WSAEWOULDBLOCK
+
    // link with Ws2_32.lib
    #pragma comment (lib, "Ws2_32.lib")
 #endif
 
 #if defined(__GNUC__)
-   #define BSD_SOCKETS
+   #define RM_SOCKETS_BSD
+
+   #include <sys/types.h>
+   #include <sys/socket.h>
+   #include <sys/ioctl.h>
+   #include <netdb.h>
+   #include <unistd.h>
+   #include <fcntl.h>
+   #include <poll.h>
+   #include <errno.h>
+
+   using SOCKET = int;
+   using WSAPOLLFD = struct pollfd;
+   using LPWSAPOLLFD = struct pollfd*;
+
+   inline errno_t WSAGetLastError() noexcept { return errno; }
+   inline int closesocket(SOCKET fd) noexcept { return ::close(fd); }
+   inline int ioctlsocket(SOCKET fd, long cmd, u_long* argp) noexcept { return ::ioctl(fd, cmd argp); }
+   inline int WSAPoll(LPWSAPOLLFD* fdArray, nfds_t nfds, int timeout) { return ::poll(fdarray, nfds, timeout); }
+
+   constexpr int INVALID_SOCKET = -1;
+   constexpr int SOCKET_ERROR = -1;
+
+   #define WSAEWOULDBLOCK  EWOULDBLOCK
+   #define WSAECONNREFUSED ECONNREFUSED
+   #define WSAEHOSTUNREACH ENETUNREACH 
+   #define WSAEAGAIN       EAGAIN
+
 #endif
 
 
@@ -97,9 +126,11 @@ namespace rmsockets {
          std::swap(lhs.code_, rhs.code_);
       }
 
+      bool operator==(const status_base_t& other) const { return code_ == other.code_; }
+
       constexpr bool ok() const noexcept { return code_ == OK; }
       constexpr bool nok() const noexcept { return code_ != OK; }
-      constexpr bool would_block() const noexcept { return code_ == WSAEWOULDBLOCK; }
+      constexpr bool would_block() const noexcept { return code_ == WSAEWOULDBLOCK || code_ == WSAEAGAIN; }
       value_type code() const noexcept { return code_; }
       void code(value_type n) noexcept { code_ = n; };
 
@@ -145,7 +176,7 @@ namespace rmsockets {
          std::array<char, NI_MAXSERV> port = {};
          if (getnameinfo(&addr_, len_, host.data(), (socklen_t)host.size(), port.data(), (socklen_t)port.size(), (NI_NUMERICHOST | NI_NUMERICSERV)) == 0)
          {
-            return std::make_pair(std::string(host.begin(), host.end()), std::string(port.begin(), port.end()));
+            return std::make_pair(std::string(host.data()), std::string(port.data()));
          }
          return std::make_pair(std::string(), std::string());
       }
@@ -242,6 +273,11 @@ namespace rmsockets {
          return handle_;
       }
 
+      bool created() const noexcept
+      {
+         return handle_ != INVALID_SOCKET;
+      }
+
       status_t create() noexcept
       {
          handle_ = ::socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP);
@@ -318,12 +354,12 @@ namespace rmsockets {
          return status_t(::getsockopt(handle_, level, optname, optval, optlen));
       }
 
-      socket_mode_t mode() const noexcept
+      socket_mode_t get_mode() const noexcept
       {
          return mode_;
       }
 
-      status_t mode(socket_mode_t sm) const noexcept
+      status_t set_mode(socket_mode_t sm) const noexcept
       {
          u_long um = (sm == socket_mode_t::nonblocking) ? 1 : 0;
          status_t status(::ioctlsocket(handle_, FIONBIO, &um));
@@ -380,6 +416,7 @@ namespace rmsockets {
       //    status_t::ok() == false, status_t::nok() == true, status_t::would_block() == false
       status_t wait(socket_event_t event, wait_timeout_t timeout_ms = SOCKET_WAIT_NEVER) const noexcept
       {
+         int connect_flags = (POLLHUP | POLLERR | POLLWRNORM);
          WSAPOLLFD fdset;
          fdset.fd = handle_;
          fdset.revents = 0;
@@ -387,22 +424,48 @@ namespace rmsockets {
          int count = WSAPoll(&fdset, 1, timeout_ms);
          if (count == 0) return status_t(WSAEWOULDBLOCK);
          if (count == SOCKET_ERROR) return status_t(SOCKET_ERROR);
-         if (event == socket_event_t::connect_ready && fdset.revents & (POLLHUP | POLLERR | POLLWRNORM)) return status_t(WSAECONNREFUSED);
+         if (event == socket_event_t::connect_ready && (fdset.revents & connect_flags) == connect_flags) return status_t(WSAECONNREFUSED);
+         if (event == socket_event_t::connect_ready && fdset.events & POLLWRNORM) return status_t(0);
          return (fdset.events & (POLLHUP | POLLRDNORM | POLLWRNORM)) ? status_t(0) : status_t(WSAEWOULDBLOCK);
       }
 
    }; // class socket_t
 
+   std::pair<socket_t, status_t> tcp_client(const std::string& host, const std::string& port, socket_mode_t mode = socket_mode_t::blocking)
+   {
+      auto [address_list, status] = ipname_resolution(host, port, nameres_type_t::normal);
+      if (status.nok()) return std::make_pair(socket_t(), status);
+      for (const auto& address : address_list)
+      {
+         socket_t socket;
+         if (status = socket.create(); status.nok()) return std::make_pair(socket_t(), status);
+         if (status = socket.connect(address); status.nok())
+         {
+            socket.close();
+            continue;
+         }
+         if (status = socket.set_mode(mode); status.nok())
+         {
+            socket.close();
+            return std::make_pair(socket_t(), status);
+         }
+         return std::make_pair(socket, status);
+      }
+      return std::pair(socket_t(), status_t(WSAEHOSTUNREACH));
+   }
+
+#if defined(RM_SOCKETS_WIN32)
    namespace startup {
 
       class socket_init_t
       {
          mutable WSADATA wd_;
+         status_t status_{ 0 };
 
       public:
          socket_init_t() noexcept
          {
-            status_t s(::WSAStartup(MAKEWORD(2, 2), &wd_));
+            status_ = status_t(::WSAStartup(MAKEWORD(2, 2), &wd_));
          }
 
          ~socket_init_t() noexcept
@@ -410,6 +473,8 @@ namespace rmsockets {
             ::WSACleanup();
          }
 
+         status_t status() { return status_;  }
+        
          socket_init_t(const socket_init_t&) = delete;
          socket_init_t(socket_init_t&&) = delete;
          socket_init_t& operator=(const socket_init_t&) = delete;
@@ -419,5 +484,6 @@ namespace rmsockets {
       const static socket_init_t socket_startup_;
 
    } // namespace startup
+#endif // defined(RM_SOCKETS_WIN32)
 
 } // namespace rmsockets
