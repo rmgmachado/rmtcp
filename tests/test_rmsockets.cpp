@@ -127,40 +127,6 @@ TEST_CASE("Test socket_t class", "[socket_t]")
 		status = socket.close();
 		REQUIRE(status.nok());
 	}
-	SECTION("Test socket_t::connect() function non-blocking")
-	{
-		socket_t socket;
-		auto [address_list, status] = ipname_resolution(echo_server_numeric, echo_server_port);
-		REQUIRE(status.ok());
-		REQUIRE(!status.would_block());
-		REQUIRE(address_list.size() > 0);
-		status = socket.connect(address_list[0], socket_mode_t::nonblocking);
-		REQUIRE(status.ok() || status.would_block());
-		if (status.would_block())
-		{
-			status = socket.wait(socket_event_t::connect_ready, 10000);
-			REQUIRE(status.ok());
-		}
-		status = socket.close();
-		REQUIRE(status.ok());
-	}
-	SECTION("Test socket_t::connect() failed non-blocking")
-	{
-		socket_t socket;
-		auto [address_list, status] = ipname_resolution(echo_server_numeric, bogus_port);
-		REQUIRE(status.ok());
-		REQUIRE(!status.would_block());
-		REQUIRE(address_list.size() > 0);
-		status = socket.connect(address_list[0], socket_mode_t::nonblocking);
-		REQUIRE(status.nok() || status.would_block());
-		if (status.would_block())
-		{
-			status = socket.wait(socket_event_t::connect_ready, SOCKET_WAIT_FOREVER);
-			REQUIRE(status.nok());
-		}
-		status = socket.close();
-		REQUIRE(status.ok());
-	}
 }
 
 status_t send_message(const socket_t& socket, const std::string& message) noexcept

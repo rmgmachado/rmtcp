@@ -11,10 +11,10 @@ set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 20)
 FILE(GLOB_RECURSE MY_HEADERS "../*.h*")
 
 # add the executable
-if (MSVC)
+if(MSVC)
    include_directories(../include ./wepoll ./)
    add_executable(rmsockets rmunit.cpp ../wepoll/wepoll.c test_rmsockets.cpp ${MY_HEADERS} )
-elseif (LINUX)
+else()
    include_directories(../include ./)
    add_executable(rmsockets rmunit.cpp test_rmsockets.cpp )
 endif()

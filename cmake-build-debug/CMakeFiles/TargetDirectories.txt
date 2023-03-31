@@ -1,0 +1,5 @@
+/home/ricardo/Repos/rmtcp/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/ricardo/Repos/rmtcp/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/home/ricardo/Repos/rmtcp/cmake-build-debug/tests/CMakeFiles/rmsockets.dir
+/home/ricardo/Repos/rmtcp/cmake-build-debug/tests/CMakeFiles/edit_cache.dir
+/home/ricardo/Repos/rmtcp/cmake-build-debug/tests/CMakeFiles/rebuild_cache.dir

@@ -55,15 +55,19 @@
    #include <fcntl.h>
    #include <poll.h>
    #include <errno.h>
+   #include <string.h>
 
    using SOCKET = int;
    using WSAPOLLFD = struct pollfd;
    using LPWSAPOLLFD = struct pollfd*;
+   using ADDRINFOA = struct addrinfo;
+   using PADDRINFOA = struct addrinfo*;
 
-   inline errno_t WSAGetLastError() noexcept { return errno; }
+   inline int WSAGetLastError() noexcept { return errno; }
    inline int closesocket(SOCKET fd) noexcept { return ::close(fd); }
-   inline int ioctlsocket(SOCKET fd, long cmd, u_long* argp) noexcept { return ::ioctl(fd, cmd argp); }
-   inline int WSAPoll(LPWSAPOLLFD* fdArray, nfds_t nfds, int timeout) { return ::poll(fdarray, nfds, timeout); }
+   inline int ioctlsocket(SOCKET fd, long cmd, u_long* argp) noexcept { return ::ioctl(fd, cmd, argp); }
+   inline int WSAPoll(LPWSAPOLLFD fdArray, nfds_t nfds, int timeout) { return ::poll(fdArray, nfds, timeout); }
+   inline void ZeroMemory(void* ptr, size_t size) { memset(ptr, '\0', size); }
 
    constexpr int INVALID_SOCKET = -1;
    constexpr int SOCKET_ERROR = -1;
@@ -73,6 +77,9 @@
    #define WSAEHOSTUNREACH ENETUNREACH 
    #define WSAEAGAIN       EAGAIN
 
+   #define SD_SEND      SHUT_WR
+   #define SD_RECEIVE   SHUT_RD
+   #define SD_BOTH      SHUT_RDWR
 #endif
 
 
@@ -313,11 +320,11 @@ namespace rmsockets {
          handle_ = ::socket(addr.family(), SOCK_STREAM, IPPROTO_TCP);
          status_t status{ (handle_ != INVALID_SOCKET) ? 0 : SOCKET_ERROR };
          if (status.nok()) return status;
-         if (status = set_mode(mode); status.nok())
+         if (status = status_t(::connect(handle_, addr.address(), addr.length())); status.nok())
          {
             close();
          }
-         else if (status = status_t(::connect(handle_, addr.address(), addr.length())); status.nok() && !status.would_block())
+         else if (status = set_mode(mode); status.nok())
          {
             close();
          }
@@ -347,7 +354,7 @@ namespace rmsockets {
       status_t accept(socket_t& client) const noexcept
       {
          sockaddr addr;
-         int addrlen = sizeof(addr);
+         socklen_t addrlen = sizeof(addr);
          if (SOCKET handle = ::accept(handle_, &addr, &addrlen); handle != INVALID_SOCKET)
          {
             client.handle_ = handle;
@@ -372,12 +379,12 @@ namespace rmsockets {
          return status_t(::ioctlsocket(handle_, cmd, argp));
       }
 
-      status_t setsockopt(int level, int optname, const char* optval, int optlen) const noexcept
+      status_t setsockopt(int level, int optname, const char* optval, socklen_t optlen) const noexcept
       {
          return status_t(::setsockopt(handle_, level, optname, optval, optlen));
       }
 
-      status_t getsockopt(int level, int optname, char* optval, int* optlen) const noexcept
+      status_t getsockopt(int level, int optname, char* optval, socklen_t* optlen) const noexcept
       {
          return status_t(::getsockopt(handle_, level, optname, optval, optlen));
       }
