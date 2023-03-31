@@ -1,6 +1,0 @@
-# ninja log v5
-1	740	1680253414181196656	tests/CMakeFiles/rmsockets.dir/rmunit.cpp.o	10b7e5729e5bc0ea
-1	916	1680254136835991888	tests/CMakeFiles/rmsockets.dir/test_rmsockets.cpp.o	2bccddfe06088019
-917	989	1680254136911991802	tests/rmsockets	c02c13e46ba4c5cb
-1	916	1680255289034770541	tests/CMakeFiles/rmsockets.dir/test_rmsockets.cpp.o	2bccddfe06088019
-916	984	1680255289102770646	tests/rmsockets	c02c13e46ba4c5cb
