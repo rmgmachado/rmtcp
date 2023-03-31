@@ -107,94 +107,59 @@ TEST_CASE("Test socket_t class", "[socket_t]")
 		REQUIRE(socket.handle() == INVALID_SOCKET);
 		REQUIRE(!socket.created());
 	}
-	SECTION("Test socket_t::create() function")
-	{
-		socket_t socket;
-		status_t status = socket.create();
-		REQUIRE(status.ok());
-		REQUIRE(!status.nok());
-		REQUIRE(!status.would_block());
-		REQUIRE(socket.get_mode() == socket_mode_t::blocking);
-		REQUIRE(socket.handle() != INVALID_SOCKET);
-		REQUIRE(socket.created());
-		socket.close();
-	}
 	SECTION("Test socket_t::connect() function blocking")
 	{
 		socket_t socket;
-		status_t status = socket.create();
+		auto [address_list, status] = ipname_resolution(echo_server_numeric, echo_server_port);
 		REQUIRE(status.ok());
-		if (status.ok())
-		{
-			auto [address_list, status] = ipname_resolution(echo_server_numeric, echo_server_port);
-			REQUIRE(status.ok());
-			REQUIRE(address_list.size() > 0);
-			status = socket.connect(address_list[0]);
-			REQUIRE(status.ok());
-			status = socket.close();
-			REQUIRE(status.ok());
-		}
+		REQUIRE(address_list.size() > 0);
+		status = socket.connect(address_list[0]);
+		REQUIRE(status.ok());
+		status = socket.close();
+		REQUIRE(status.ok());
 	}
 	SECTION("Test socket_t::connect() failed blocking")
 	{
 		socket_t socket;
-		status_t status = socket.create();
-		REQUIRE(status.ok());
-		if (status.ok())
-		{
-			status = socket.connect(ipaddress_t());
-			REQUIRE(status.nok());
-			status = socket.close();
-			REQUIRE(status.ok());
-		}
+		status_t status;
+		status = socket.connect(ipaddress_t());
+		REQUIRE(status.nok());
+		status = socket.close();
+		REQUIRE(status.nok());
 	}
 	SECTION("Test socket_t::connect() function non-blocking")
 	{
 		socket_t socket;
-		status_t status = socket.create();
+		auto [address_list, status] = ipname_resolution(echo_server_numeric, echo_server_port);
 		REQUIRE(status.ok());
-		status = socket.set_mode(socket_mode_t::nonblocking);
-		REQUIRE(status.ok());
-		if (status.ok())
+		REQUIRE(!status.would_block());
+		REQUIRE(address_list.size() > 0);
+		status = socket.connect(address_list[0], socket_mode_t::nonblocking);
+		REQUIRE(status.ok() || status.would_block());
+		if (status.would_block())
 		{
-			auto [address_list, status] = ipname_resolution(echo_server_numeric, echo_server_port);
-			REQUIRE(status.ok());
-			REQUIRE(!status.would_block());
-			REQUIRE(address_list.size() > 0);
-			status = socket.connect(address_list[0]);
-			REQUIRE(status.ok() || status.would_block());
-			if (status.would_block())
-			{
-				status = socket.wait(socket_event_t::connect_ready, SOCKET_WAIT_FOREVER);
-				REQUIRE(status.ok());
-			}
-			status = socket.close();
+			status = socket.wait(socket_event_t::connect_ready, 10000);
 			REQUIRE(status.ok());
 		}
+		status = socket.close();
+		REQUIRE(status.ok());
 	}
 	SECTION("Test socket_t::connect() failed non-blocking")
 	{
 		socket_t socket;
-		status_t status = socket.create();
+		auto [address_list, status] = ipname_resolution(echo_server_numeric, bogus_port);
 		REQUIRE(status.ok());
-		status = socket.set_mode(socket_mode_t::nonblocking);
-		REQUIRE(status.ok());
-		if (status.ok())
+		REQUIRE(!status.would_block());
+		REQUIRE(address_list.size() > 0);
+		status = socket.connect(address_list[0], socket_mode_t::nonblocking);
+		REQUIRE(status.nok() || status.would_block());
+		if (status.would_block())
 		{
-			auto [address_list, status] = ipname_resolution(echo_server_numeric, bogus_port);
-			REQUIRE(status.ok());
-			REQUIRE(!status.would_block());
-			REQUIRE(address_list.size() > 0);
-			status = socket.connect(address_list[0]);
-			REQUIRE(status.ok() || status.would_block());
-			if (status.would_block())
-			{
-				status = socket.wait(socket_event_t::connect_ready, SOCKET_WAIT_FOREVER);
-				REQUIRE(status.nok());
-			}
-			status = socket.close();
-			REQUIRE(status.ok());
+			status = socket.wait(socket_event_t::connect_ready, SOCKET_WAIT_FOREVER);
+			REQUIRE(status.nok());
 		}
+		status = socket.close();
+		REQUIRE(status.ok());
 	}
 }
 

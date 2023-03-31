@@ -169,6 +169,7 @@ namespace rmsockets {
 
       const sockaddr* address() const noexcept { return &addr_; }
       socklen_t length() const noexcept { return len_; }
+      int family() const noexcept { return addr_.sa_family; }
 
       std::pair<std::string, std::string> peer_name() const noexcept
       {
@@ -278,16 +279,17 @@ namespace rmsockets {
          return handle_ != INVALID_SOCKET;
       }
 
-      status_t create() noexcept
+      socket_mode_t get_mode() const noexcept
       {
-         handle_ = ::socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP);
-         mode_ = socket_mode_t::blocking;
-         return status_t((handle_ != INVALID_SOCKET) ? 0 : SOCKET_ERROR);
+         return mode_;
       }
 
-      status_t connect(const ipaddress_t& addr) const noexcept
+      status_t set_mode(socket_mode_t sm) const noexcept
       {
-         return status_t(::connect(handle_, addr.address(), addr.length()));
+         u_long um = (sm == socket_mode_t::nonblocking) ? 1 : 0;
+         status_t status(::ioctlsocket(handle_, FIONBIO, &um));
+         mode_ = status.ok() ? sm : mode_;
+         return status;
       }
 
       status_t close() const noexcept
@@ -301,14 +303,45 @@ namespace rmsockets {
          return status;
       }
 
-      status_t bind(const ipaddress_t& addr) const noexcept
+      status_t shutdown(socket_close_t how = socket_close_t::send) const noexcept
       {
-         return status_t(::bind(handle_, addr.address(), addr.length()));
+         return status_t(::shutdown(handle_, (int)how));
       }
 
-      status_t listen(int backlog) const noexcept
+      status_t connect(const ipaddress_t& addr, socket_mode_t mode = socket_mode_t::blocking) const noexcept
       {
-         return status_t(::listen(handle_, backlog));
+         handle_ = ::socket(addr.family(), SOCK_STREAM, IPPROTO_TCP);
+         status_t status{ (handle_ != INVALID_SOCKET) ? 0 : SOCKET_ERROR };
+         if (status.nok()) return status;
+         if (status = set_mode(mode); status.nok())
+         {
+            close();
+         }
+         else if (status = status_t(::connect(handle_, addr.address(), addr.length())); status.nok() && !status.would_block())
+         {
+            close();
+         }
+         return status;
+      }
+
+      status_t listen(const ipaddress_t& addr, int backlog, socket_mode_t mode = socket_mode_t::blocking) const noexcept
+      {
+         handle_ = ::socket(addr.family(), SOCK_STREAM, IPPROTO_TCP);
+         status_t status{ (handle_ != INVALID_SOCKET) ? 0 : SOCKET_ERROR };
+         if (status.nok()) return status;
+         if (status = status_t(::bind(handle_, addr.address(), addr.length())); status.nok())
+         {
+            close();
+         }
+         else if (status = status_t(::listen(handle_, backlog)); status.nok())
+         {
+            close();
+         }
+         else if (status = set_mode(mode); status.nok())
+         {
+            close();
+         }
+         return status;
       }
 
       status_t accept(socket_t& client) const noexcept
@@ -334,11 +367,6 @@ namespace rmsockets {
          return status;
       }
 
-      status_t shutdown(socket_close_t how = socket_close_t::send) const noexcept
-      {
-         return status_t(::shutdown(handle_, (int)how));
-      }
-
       status_t ioctlsocket(long cmd, u_long* argp) const noexcept
       {
          return status_t(::ioctlsocket(handle_, cmd, argp));
@@ -352,19 +380,6 @@ namespace rmsockets {
       status_t getsockopt(int level, int optname, char* optval, int* optlen) const noexcept
       {
          return status_t(::getsockopt(handle_, level, optname, optval, optlen));
-      }
-
-      socket_mode_t get_mode() const noexcept
-      {
-         return mode_;
-      }
-
-      status_t set_mode(socket_mode_t sm) const noexcept
-      {
-         u_long um = (sm == socket_mode_t::nonblocking) ? 1 : 0;
-         status_t status(::ioctlsocket(handle_, FIONBIO, &um));
-         mode_ = status.ok() ? sm : mode_;
-         return status;
       }
 
       status_t send(const char* buffer, size_t len, size_t& bytes_sent) const noexcept
@@ -438,17 +453,7 @@ namespace rmsockets {
       for (const auto& address : address_list)
       {
          socket_t socket;
-         if (status = socket.create(); status.nok()) return std::make_pair(socket_t(), status);
-         if (status = socket.connect(address); status.nok())
-         {
-            socket.close();
-            continue;
-         }
-         if (status = socket.set_mode(mode); status.nok())
-         {
-            socket.close();
-            return std::make_pair(socket_t(), status);
-         }
+         if (status = socket.connect(address, mode); status.nok()) continue;
          return std::make_pair(socket, status);
       }
       return std::pair(socket_t(), status_t(WSAEHOSTUNREACH));
@@ -473,7 +478,7 @@ namespace rmsockets {
             ::WSACleanup();
          }
 
-         status_t status() { return status_;  }
+         status_t status() const noexcept { return status_;  }
         
          socket_init_t(const socket_init_t&) = delete;
          socket_init_t(socket_init_t&&) = delete;
