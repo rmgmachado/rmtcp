@@ -26,9 +26,14 @@
 \*****************************************************************************/
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <array>
 #include <vector>
+#include <list>
+#include <mutex>
+#include <thread>
+#include <functional>
 
 #if defined(_MSC_VER)
    #define RM_SOCKETS_WIN32
@@ -39,6 +44,7 @@
    #include "wepoll.h"
 
    #define WSAEAGAIN WSAEWOULDBLOCK
+   constexpr HANDLE INVALID_EPOLL_HANDLE = nullptr;
 
    // link with Ws2_32.lib
    #pragma comment (lib, "Ws2_32.lib")
@@ -50,6 +56,7 @@
    #include <sys/types.h>
    #include <sys/socket.h>
    #include <sys/ioctl.h>
+   #include <sys/epoll.h>
    #include <netdb.h>
    #include <unistd.h>
    #include <fcntl.h>
@@ -58,6 +65,7 @@
    #include <string.h>
 
    using SOCKET = int;
+   using HANDLE = int;
    using WSAPOLLFD = struct pollfd;
    using LPWSAPOLLFD = struct pollfd*;
    using ADDRINFOA = struct addrinfo;
@@ -68,14 +76,18 @@
    inline int ioctlsocket(SOCKET fd, long cmd, u_long* argp) noexcept { return ::ioctl(fd, cmd, argp); }
    inline int WSAPoll(LPWSAPOLLFD fdArray, nfds_t nfds, int timeout) { return ::poll(fdArray, nfds, timeout); }
    inline void ZeroMemory(void* ptr, size_t size) { memset(ptr, '\0', size); }
+   inline int epoll_close(HANDLE ephnd) { return close(ephnd); }
 
    constexpr int INVALID_SOCKET = -1;
    constexpr int SOCKET_ERROR = -1;
+   constexpr HANDLE INVALID_EPOLL_HANDLE = -1;
 
    #define WSAEWOULDBLOCK  EWOULDBLOCK
    #define WSAECONNREFUSED ECONNREFUSED
    #define WSAEHOSTUNREACH ENETUNREACH 
    #define WSAEAGAIN       EAGAIN
+   #define WSAEINVAL       EINVAL
+   #define WSAENOTSOCK     ENOTSOCK
 
    #define SD_SEND      SHUT_WR
    #define SD_RECEIVE   SHUT_RD
@@ -98,6 +110,9 @@ namespace rmsockets {
    // define default listen() backlog size
    constexpr int SOCKET_LISTEN_BACKLOG = 512;
 
+   // define how long epoll should wait before returning
+   constexpr int SOCKET_EPOLL_WAIT_TIMEOUT = 10; 
+
    // used with select and socket::wait functions
    using wait_timeout_t = int;
 
@@ -105,7 +120,7 @@ namespace rmsockets {
    constexpr wait_timeout_t SOCKET_WAIT_NEVER = 0L;
 
    enum class nameres_type_t : int { normal = 0, passive = AI_PASSIVE };
-   enum class socket_event_t { recv_ready, send_ready, connect_ready, accept_ready };
+   enum class socket_event_t { recv_ready, send_ready, connect_ready, accept_ready, send_recv_ready };
    enum class socket_mode_t { blocking, nonblocking };
    enum class socket_close_t : int { send = SD_SEND, recv = SD_RECEIVE, both = SD_BOTH };
 
@@ -270,6 +285,16 @@ namespace rmsockets {
          return *this;
       }
 
+      bool operator==(const socket_t& other) const noexcept
+      {
+         return handle_ == other.handle_;
+      }
+
+      bool operator!=(const socket_t& other) const noexcept
+      {
+         return handle_ != other.handle_;
+      }
+
       friend void swap(socket_t& lhs, socket_t& rhs) noexcept
       {
          std::swap(lhs.handle_, rhs.handle_);
@@ -396,6 +421,18 @@ namespace rmsockets {
          return status_t((count != SOCKET_ERROR) ? 0 : SOCKET_ERROR);
       }
 
+      status_t send(const std::string& buffer, size_t& index) const noexcept
+      {
+         status_t status;
+         if (index >= buffer.length()) return status;
+         size_t bytes_sent{ 0 };
+         if (status = send(&buffer[index], buffer.length() - index, bytes_sent); status.ok())
+         {
+            index += bytes_sent;
+         }
+         return status;
+      }
+
       status_t send(const char* buffer, size_t len, size_t& bytes_sent, wait_timeout_t timeout_ms) const noexcept
       {
          status_t status = wait(socket_event_t::send_ready, timeout_ms);
@@ -406,12 +443,37 @@ namespace rmsockets {
          return status;
       }
 
-      // if status_t::ok() == true and bytes_received == 0, peer terminating connection
+      status_t send(const std::string& buffer, size_t& index, wait_timeout_t timeout_ms) const noexcept
+      {
+         status_t status;
+         if (index >= buffer.length()) return status;
+         size_t bytes_sent{ 0 };
+         if (status = send(&buffer[index], (buffer.length() - index), bytes_sent, timeout_ms); status.ok())
+         {
+            index += bytes_sent;
+         }
+         return status;
+      }
+
+      // if status_t::ok() == true and bytes_received == 0, then peer closing connection
       status_t recv(char* buffer, size_t len, size_t& bytes_received) const noexcept
       {
          int count = ::recv(handle_, buffer, static_cast<int>(len), 0);
          bytes_received = (count != SOCKET_ERROR) ? count : 0;
          return status_t(count != SOCKET_ERROR ? 0 : SOCKET_ERROR);
+      }
+
+      template <size_t RxBufSize = 4096>
+      status_t recv(std::string& buffer, size_t& bytes_received) const noexcept
+      {
+         std::array<char, RxBufSize> recv_buffer = {};
+         bytes_received = 0;
+         status_t status = recv(recv_buffer.data(), recv_buffer.size(), bytes_received);
+         if (status.ok() && bytes_received > 0)
+         {
+            buffer.append(recv_buffer.cbegin(), recv_buffer.cbegin() + bytes_received);
+         }
+         return status;
       }
 
       status_t recv(char* buffer, size_t len, size_t& bytes_received, wait_timeout_t timeout_ms) const noexcept
@@ -420,6 +482,19 @@ namespace rmsockets {
          if (status.ok())
          {
             status = recv(buffer, len, bytes_received);
+         }
+         return status;
+      }
+
+      template <size_t RxBufSize = 4096>
+      status_t recv(std::string& buffer, size_t& bytes_received, wait_timeout_t timeout_ms) const noexcept
+      {
+         std::array<char, RxBufSize> recv_buffer = {};
+         bytes_received = 0;
+         status_t status = recv(recv_buffer.data(), recv_buffer.size(), bytes_received, timeout_ms);
+         if (status.ok() && bytes_received > 0)
+         {
+            buffer.append(recv_buffer.cbegin(), recv_buffer.cbegin() + bytes_received);
          }
          return status;
       }
@@ -442,13 +517,20 @@ namespace rmsockets {
          WSAPOLLFD fdset;
          fdset.fd = handle_;
          fdset.revents = 0;
-         fdset.events = (event == socket_event_t::recv_ready || event == socket_event_t::accept_ready) ? POLLRDNORM : POLLWRNORM;
+         fdset.events = set_events(event);
          int count = WSAPoll(&fdset, 1, timeout_ms);
          if (count == 0) return status_t(WSAEWOULDBLOCK);
          if (count == SOCKET_ERROR) return status_t(SOCKET_ERROR);
          if (event == socket_event_t::connect_ready && (fdset.revents & connect_flags) == connect_flags) return status_t(WSAECONNREFUSED);
          if (event == socket_event_t::connect_ready && fdset.events & POLLWRNORM) return status_t(0);
          return (fdset.events & (POLLHUP | POLLRDNORM | POLLWRNORM)) ? status_t(0) : status_t(WSAEWOULDBLOCK);
+      }
+
+   private:
+      SHORT set_events(socket_event_t event) const noexcept
+      {
+         if (event == socket_event_t::send_recv_ready) return (POLLRDNORM | POLLWRNORM);
+         return (event == socket_event_t::recv_ready || event == socket_event_t::accept_ready) ? POLLRDNORM : POLLWRNORM;
       }
 
    }; // class socket_t
@@ -465,6 +547,191 @@ namespace rmsockets {
       }
       return std::pair(socket_t(), status_t(WSAEHOSTUNREACH));
    }
+
+   template <typename T, size_t EvCnt>
+   class epoll_t
+   {
+      HANDLE ephnd_{ INVALID_EPOLL_HANDLE };
+      using event_array = std::array<epoll_event, EvCnt>;
+      event_array events_ = {};
+      size_t count_{ 0 };
+
+      using active_connection = std::pair<socket_t, T>;
+      using active_connection_list = std::list<active_connection>;
+      active_connection_list active_connections_;
+
+   public:
+      using value_type = epoll_event;
+      using iterator = typename event_array::iterator;
+      using const_iterator = typename event_array::const_iterator;
+
+      epoll_t() = default;
+      ~epoll_t() = default;
+      epoll_t(const epoll_t&) = default;
+      epoll_t(epoll_t&&) noexcept = default;
+      epoll_t& operator=(const epoll_t&) = default;
+      epoll_t& operator=(epoll_t&&) noexcept = default;
+
+      iterator begin() noexcept { return events_.begin(); }
+      iterator end() noexcept { return begin() + count_; }
+      const_iterator cbegin() noexcept { return events_.cbegin(); }
+      const_iterator cend() noexcept { return cbegin() + count_; }
+      size_t size() const noexcept { return count_; }
+
+      status_t create() noexcept
+      {
+         ephnd_ = epoll_create1(0);
+         if (ephnd_ == INVALID_EPOLL_HANDLE) return status_t(SOCKET_ERROR);
+         return status_t();
+      }
+
+      status_t close() noexcept
+      {
+         if (ephnd_ != INVALID_EPOLL_HANDLE)
+         {
+            status_t status{ epoll_close(ephnd_) };
+            return status;
+         }
+         return status_t();
+      }
+
+      status_t wait(int timeout_ms = SOCKET_EPOLL_WAIT_TIMEOUT) noexcept
+      {
+         ZeroMemory(events_.data(), events_.size() * sizeof(epoll_event));
+         int res = epoll_wait(ephnd_, events_.data(), static_cast<int>(events_.size()), timeout_ms);
+         if (res < 0) return status_t(SOCKET_ERROR);
+         count_ = res;
+         return status_t();
+      }
+
+      status_t add(socket_t socket, socket_event_t event, const T& data) noexcept
+      {
+         epoll_event ev = {};
+         auto data_ref = active_connections_.emplace_back(std::make_pair(socket, data));
+         ev.events = txlate_events(event);
+         ev.data.ptr = &data_ref;
+         status_t status{ epoll_ctl(ephnd_, EPOLL_CTL_ADD, socket.handle(), &ev); };
+         return status;
+      }
+
+      status_t modify(socket_event_t event, epoll_event& ev) noexcept
+      {
+         epevent->events = txlate_events(event);
+         return status_t{ epoll_ctl(ephnd_, EPOLL_CTL_MOD, ev.data.ptr->first.handle(), &ev)};
+      }
+
+      status_t remove(epoll_event& ev) noexcept
+      {
+         status_t status{ epoll_ctl(ephnd_, EPOLL_CTL_DEL, ev.data.ptr->first.handle(), nullptr); };
+         if (status.ok())
+         {
+            status = ev.data.ptr->first.close();
+            active_connections_.remove_if([=](const active_connection& data_ref) { return data_ref.first == ev.data.ptr->first; });
+         }
+         return status;
+      }
+
+      status_t remove_all() noexcept
+      {
+         for (auto& connection : active_connections_)
+         {
+            socket_t socket = connection.first;
+            epoll_ctl(ephnd_, EPOLL_CTL_DEL, socket.handle(), nullptr);
+            socket.close();
+         }
+         active_connections_.clear();
+      }
+
+      size_t total_connections() const noexcept
+      {
+         return active_connections_.size();
+      }
+
+   private:
+      uint32_t txlate_events(socket_event_t event) const noexcept
+      {
+         using enum socket_event_t;
+         if (event == send_recv_ready) return (EPOLLIN | EPOLLOUT);
+         return (event == recv_ready || event == accept_ready) ? EPOLLIN : EPOLLOUT;
+      }
+   };
+
+   enum class tcp_result_t { want_recv, want_send, want_close };
+   enum class callback_type_t { connect, disconnect, receive, send, close };
+   enum class tcp_log_type_t { error, warning, info };
+
+   template <typename T>
+   using tcp_callback_t = std::function<tcp_result_t(callback_type_t, socket_t&, T&)>;
+
+   using tcp_log_callback_t = std::function<bool(socket_t&, status_t, const std::string&)>;
+
+   template <typename T, size_t EvCnt = 64>
+   class tcp_server_t
+   {
+      tcp_callback_t<T>* on_tcp_callback_{ nullptr };
+      tcp_log_callback_t* on_log_callback_{ nullptr };
+      epoll_t<int, 8> listen_ephnd_{ INVALID_EPOLL_HANDLE };
+      epoll_t<T, evCnt> io_ephnd_{ INVALID_EPOLL_HANDLE };
+      mutable std::mutex mutex_;
+      std::thread listener_;
+      std::thread iohandler_;
+      bool started_{ false };
+      bool stop_requested_{ false };
+
+   public:
+      tcp_server_t() = default;
+      ~tcp_server_t() = default;
+      tcp_server_t(const tcp_server_t&) = delete;
+      tcp_server_t(tcp_server_t&&) noexcept = default;
+      tcp_server_t& operator=(const tcp_server_t&) = delete;
+      tcp_server_t& operator=(tcp_server_t&&) noexcept = default;
+
+      void set_tcp_callback(tcp_callback_t<T>* callback) noexcept { on_tcp_callback_ = callback; }
+      tcp_callback_t<T>* get_tcp_callback() noexcept { return on_tcp_callback_;  }
+
+      void set_log_callback(tcp_log_callback_t* callback) noexcept { on_log_callback_ = callback; }
+      tcp_log_callback_t* get_log_callback() noexcept { return on_log_callback_; }
+
+      void start(const std::string& iface, const std::string& port)
+      {
+         if (check_start()) return;
+         listener_ = std::thread([this]() { listener(); });
+         iohandler_ = std::thread([this]() { iohandler(); });
+
+      }
+
+      void stop()
+      {
+         if (check_stop()) return;
+         iohandler_.join();
+         listener_.join();
+      }
+
+   private:
+      bool check_start() const noexcept
+      {
+         std::unique_lock<std::mutex> lock(mutex_);
+         if (started_) return true;
+         started_ = true;
+         return false;
+      }
+
+      bool check_stop() const noexcept
+      {
+         std::unique_lock<std::mutex> lock(mutex_);
+         if (!started_) return true;
+         started_ = false;
+         stop_requested_ = true;
+         return false;
+      }
+
+      void listener() noexcept
+      {}
+
+      void iohandler() noexcept
+      {}
+
+   }; // class tcp_server_t
 
 #if defined(RM_SOCKETS_WIN32)
    namespace startup {
